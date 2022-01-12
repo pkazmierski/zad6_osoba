@@ -1,0 +1,11 @@
+90 - w pxl dziel przez 90 (N - całkowita liczba seenMovies) zamiast moviesToSplit.size()
+d - depth, domyślnie 13
+t - thresholds, domyślnie 3
+mgX - remove genres if they only appear X times
+mkX - remove keywords if they only appear X times
+nc - no continuous values
+cd - cast and directors
+mcX - remove cast if they only appear X times
+mdX - remove directors if they only appear X times
+nq - negative quality
+cr - continuous restored
