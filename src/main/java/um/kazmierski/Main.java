@@ -5,20 +5,17 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.opencsv.bean.ColumnPositionMappingStrategy;
 import com.opencsv.bean.CsvToBean;
 import com.opencsv.bean.CsvToBeanBuilder;
-import um.kazmierski.model.*;
+import um.kazmierski.model.FullMovieInfo;
+import um.kazmierski.model.UserCsvMovies;
+import um.kazmierski.model.UserFullMovies;
 import um.kazmierski.model.csv.CsvMovieInfo;
 import um.kazmierski.model.csv.CsvMovieScore;
-import um.kazmierski.model.tmdb.Genre;
-import um.kazmierski.model.tmdb.Keyword;
 import um.kazmierski.model.tmdb.TmdbMovie;
 
 import java.io.*;
 import java.nio.file.Files;
-import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
 import java.util.*;
-import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import static com.diogonunes.jcolor.Ansi.colorize;
@@ -32,16 +29,6 @@ public class Main {
     private static final String API_KEY_PATH = "./data/tmdb_api_key.txt"; // TMDB API key
     private static final String SUBMISSION_FILE_PATH = "./data/submission.csv"; // result file
 
-
-    // TASK 5 CONFIG
-    private static final int CLASSES_COUNT = 6;
-    private static final int MAX_DEPTH = 2;
-    private static final int NO_SCORE = -999;
-    private static final int NUM_OF_THRESHOLDS = 3;
-    private static final int DEPTH_START_ZERO = 0;
-    private static final int TOP_CAST_LIMIT = 5;
-
-    // TASK 6 CONFIG
     private static final int MIN_SAME_SEEN_MOVIES = 1;
     private static final int K_CLOSEST_USERS = 5;
 
@@ -107,10 +94,17 @@ public class Main {
         System.out.println("\nComplete!");
     }
 
-    private static Set<Integer> findSimilarUsersSorted(Integer sourceUserId, // user for whom we are finding recommendations
-                                                        UserFullMovies sourceUserFullMovies, // user's movies
-                                                        Map<Integer, UserCsvMovies> allUsersMovies) { // movies of ALL the users, key is the user ID
-        Map<Integer, UserCsvMovies> filteredAllUsersMovies = new HashMap<>(allUsersMovies); // movies of ALL the users, without the current (source) user
+    /**
+     * @param sourceUserId user for whom we are finding recommendations
+     * @param sourceUserFullMovies user's movies
+     * @param allUsersMovies movies of ALL the users, key is the user ID
+     * @return Sorted set of user IDs in ascending order of similarity
+     */
+    private static Set<Integer> findSimilarUsersSorted(Integer sourceUserId,
+                                                        UserFullMovies sourceUserFullMovies,
+                                                        Map<Integer, UserCsvMovies> allUsersMovies) {
+        // movies of ALL the users, without the current (source) user
+        Map<Integer, UserCsvMovies> filteredAllUsersMovies = new HashMap<>(allUsersMovies);
         filteredAllUsersMovies.remove(sourceUserId);
 
         Map<Integer, Double> userDistances = new HashMap<>();
@@ -151,45 +145,11 @@ public class Main {
     }
 
     private static int getMovieScore(FullMovieInfo sourceUserSeenMovie, UserCsvMovies targetUserCsvMovies) {
-//        for (CsvMovieScore targetSeenCsvMovieScore : targetUserCsvMovies.seenMovies) {
-//            if (targetSeenCsvMovieScore.index == sourceUserSeenMovie.csvScore.index) {
-//                return targetSeenCsvMovieScore.score;
-//            }
-//        }
-//
-//        return -1;
         return targetUserCsvMovies.seenMovies.stream()
                 .filter(seenCsvMovieScore -> seenCsvMovieScore.movieCsvIndex == sourceUserSeenMovie.csvScore.movieCsvIndex)
                 .findFirst()
                 .map(csvMovieScore -> csvMovieScore.score)
                 .orElse(-1);
-    }
-
-    public static void printTree(Node root, int userId) {
-        @SuppressWarnings("PointlessArithmeticExpression")
-        final int linesCount = MAX_DEPTH + ((MAX_DEPTH - 1) * 2);
-
-        ArrayList<ArrayList<String>> lines = new ArrayList<>();
-        for (int i = 0; i < linesCount; i++) {
-            lines.add(new ArrayList<>());
-        }
-
-        saveLines(root, lines);
-
-        System.out.println("\n## Tree for user ID " + userId);
-        for (ArrayList<String> line : lines) {
-            System.out.println(String.join("\t", line));
-        }
-    }
-
-    public static void saveLines(Node tree, ArrayList<ArrayList<String>> lines) {
-        if (tree.criterion != null) {
-            lines.get(tree.depth - 1).add(tree.criterion.description);
-            saveLines(tree.left, lines);
-            saveLines(tree.right, lines);
-        } else {
-            lines.get(tree.depth - 1).add(String.valueOf(tree.scoreLabel));
-        }
     }
 
     /**
@@ -210,338 +170,6 @@ public class Main {
         }
 
         return userFullMovies;
-    }
-
-    private static Node induceDecisionTree(UserFullMovies userFullMovies) {
-        List<Criterion> criteria = generateCriteria(userFullMovies);
-        return generateNode(criteria, userFullMovies.seenMovies, DEPTH_START_ZERO);
-    }
-
-    private static Node generateNode(List<Criterion> criteria, List<FullMovieInfo> moviesToSplit, int previousDepth) {
-        int currentDepth = previousDepth + 1;
-
-        if (moviesToSplit.size() == 1)
-            return Node.makeLeaf(moviesToSplit, currentDepth);
-
-        Criterion bestCriterion = null;
-        double bestQuality = Double.NEGATIVE_INFINITY;
-        double bestGiniIndexLeft = -1.0; // impurity
-        double bestGiniIndexRight = -1.0; // impurity
-        List<FullMovieInfo> bestLeftMovies = new ArrayList<>(); // matches, true
-        List<FullMovieInfo> bestRightMovies = new ArrayList<>(); // no match, false
-
-        for (Criterion criterion : criteria) {
-            List<FullMovieInfo> leftMovies = new ArrayList<>();
-            List<FullMovieInfo> rightMovies = new ArrayList<>();
-
-            for (FullMovieInfo fullMovie : moviesToSplit) {
-                if (criterion.function.apply(fullMovie.tmdb)) { // true = left
-                    leftMovies.add(fullMovie);
-                } else { // false = right
-                    rightMovies.add(fullMovie);
-                }
-            }
-
-            double giniIndexMoviesToSplit = calculateGiniIndex(moviesToSplit); // Q^R
-            double giniIndexLeft = calculateGiniIndex(leftMovies); // Q^L
-            double giniIndexRight = calculateGiniIndex(rightMovies); // Q^P
-            double leftWeight = (double) leftMovies.size() / moviesToSplit.size();
-            double rightWeight = (double) rightMovies.size() / moviesToSplit.size();
-
-            // Q(c), information gain, Gini gain
-            double quality = giniIndexMoviesToSplit - (leftWeight * giniIndexLeft + rightWeight * giniIndexRight);
-
-            if (quality > bestQuality) {
-                bestQuality = quality;
-                bestCriterion = criterion;
-                bestLeftMovies = leftMovies;
-                bestRightMovies = rightMovies;
-                bestGiniIndexLeft = giniIndexLeft;
-                bestGiniIndexRight = giniIndexRight;
-            }
-        }
-
-        Node leftNode;
-        Node rightNode;
-
-        if (bestLeftMovies.size() == 0) {
-            return Node.makeLeaf(bestRightMovies, currentDepth);
-        }
-        if (bestRightMovies.size() == 0) {
-            return Node.makeLeaf(bestLeftMovies, currentDepth);
-        }
-
-        if (currentDepth + 1 < MAX_DEPTH) { // next node is below the threshold
-            if (bestGiniIndexLeft > 0.1) { // high impurity
-                leftNode = generateNode(criteria, bestLeftMovies, currentDepth);
-            } else {
-                leftNode = Node.makeLeaf(bestLeftMovies, currentDepth + 1);
-            }
-
-            if (bestGiniIndexRight > 0.1) { // high impurity
-                rightNode = generateNode(criteria, bestRightMovies, currentDepth);
-            } else {
-                rightNode = Node.makeLeaf(bestRightMovies, currentDepth + 1);
-            }
-        } else { // next node will be max depth
-            leftNode = Node.makeLeaf(bestLeftMovies, currentDepth + 1);
-            rightNode = Node.makeLeaf(bestRightMovies, currentDepth + 1);
-        }
-
-        return new Node(leftNode, rightNode, bestCriterion, moviesToSplit, NO_SCORE, currentDepth);
-    }
-
-    public static int getMajorityScoreLabel(List<FullMovieInfo> moviesToSplit) {
-        return moviesToSplit.stream()
-                // map movie to score
-                .map(fullMovieInfo -> fullMovieInfo.csvScore.score)
-                // summarize scores
-                .collect(Collectors.groupingBy(Function.identity(), Collectors.counting()))
-                // fetch the max entry
-                .entrySet().stream().max(Map.Entry.comparingByValue())
-                // map to score
-                .map(Map.Entry::getKey)
-                .orElseThrow(IllegalAccessError::new);
-    }
-
-    private static double calculateGiniIndex(List<FullMovieInfo> movies) {
-        if (movies.size() == 0)
-            return 1.0;
-
-        double sum = 0.0;
-
-        List<List<FullMovieInfo>> classes = new ArrayList<>();
-        for (int l = 0; l < CLASSES_COUNT; l++) {
-            classes.add(new ArrayList<>());
-        }
-
-        for (FullMovieInfo movieInfo : movies) {
-            int score = movieInfo.csvScore.score;
-            classes.get(score).add(movieInfo);
-        }
-
-
-        for (int l = 0; l < CLASSES_COUNT; l++) {
-            double pxl = (double) classes.get(l).size() / movies.size(); // p^x_l
-            sum += Math.pow(pxl, 2);
-        }
-
-        return 1 - sum;
-    }
-
-    private static List<Criterion> generateCriteria(UserFullMovies userFullMovies) {
-        List<Criterion> criteria = new ArrayList<>();
-
-        // generate criteria for list values
-        criteria.addAll(generateAllListCriteria(userFullMovies));
-        // generate criteria for continuous values (3 thresholds values)
-        criteria.addAll(generateAllContinuousValuesCriteria(userFullMovies));
-
-        return criteria;
-    }
-
-    private static Collection<? extends Criterion> generateAllContinuousValuesCriteria(UserFullMovies userFullMovies) {
-        ArrayList<Criterion> criteria = new ArrayList<>();
-
-        criteria.addAll(generateSingleContinuousValueCriteriaDouble(
-                userFullMovies,
-                "popularity below",
-                TmdbMovie::getPopularity));
-
-        criteria.addAll(generateSingleContinuousValueCriteriaDouble(
-                userFullMovies,
-                "vote average below",
-                TmdbMovie::getVoteAverage));
-
-        criteria.addAll(generateSingleContinuousValueCriteriaLong(
-                userFullMovies,
-                "vote count below",
-                tmdbMovie -> Long.valueOf(tmdbMovie.getVoteCount())));
-
-        criteria.addAll(generateSingleContinuousValueCriteriaLong(
-                userFullMovies,
-                "budget below",
-                tmdbMovie -> Long.valueOf(tmdbMovie.getBudget())));
-
-        criteria.addAll(generateSingleContinuousValueCriteriaLong(
-                userFullMovies,
-                "release date before Epoch day",
-                tmdbMovie -> getEpochDayFromString(tmdbMovie.getReleaseDate())));
-
-        return criteria;
-    }
-
-    private static Collection<? extends Criterion> generateSingleContinuousValueCriteriaDouble(
-            UserFullMovies userFullMovies, String descriptionStart, Function<TmdbMovie, Double> comparisonFunction) {
-        final ArrayList<Criterion> criteria = new ArrayList<>();
-
-        double min = comparisonFunction.apply(
-                userFullMovies.seenMovies
-                        .stream()
-                        .min(Comparator.comparing(fullMovieInfo -> comparisonFunction.apply(fullMovieInfo.tmdb)))
-                        .orElseThrow(NoSuchElementException::new).tmdb);
-
-        double max = comparisonFunction.apply(
-                userFullMovies.seenMovies
-                        .stream()
-                        .max(Comparator.comparing(fullMovieInfo -> comparisonFunction.apply(fullMovieInfo.tmdb)))
-                        .orElseThrow(NoSuchElementException::new).tmdb);
-
-        double interval = (max - min) / (double) (NUM_OF_THRESHOLDS + 1);
-        ArrayList<Double> thresholds = new ArrayList<>();
-        for (int i = 1; i <= NUM_OF_THRESHOLDS; i++) {
-            thresholds.add(min + (interval * i));
-        }
-
-        thresholds.forEach(thresholdValue -> criteria.add(new Criterion(
-                tmdbMovie -> comparisonFunction.apply(tmdbMovie) < thresholdValue,
-                descriptionStart + " " + thresholdValue))
-        );
-
-        return criteria;
-    }
-
-    private static Collection<? extends Criterion> generateSingleContinuousValueCriteriaLong(
-            UserFullMovies userFullMovies,
-            @SuppressWarnings("SameParameterValue") String descriptionStart,
-            Function<TmdbMovie, Long> comparisonFunction) {
-        final ArrayList<Criterion> criteria = new ArrayList<>();
-
-        long min = comparisonFunction.apply(
-                userFullMovies.seenMovies
-                        .stream()
-                        .min(Comparator.comparing(fullMovieInfo -> comparisonFunction.apply(fullMovieInfo.tmdb)))
-                        .orElseThrow(NoSuchElementException::new).tmdb);
-
-        long max = comparisonFunction.apply(
-                userFullMovies.seenMovies
-                        .stream()
-                        .max(Comparator.comparing(fullMovieInfo -> comparisonFunction.apply(fullMovieInfo.tmdb)))
-                        .orElseThrow(NoSuchElementException::new).tmdb);
-
-        long interval = (max - min) / (NUM_OF_THRESHOLDS + 1);
-        ArrayList<Long> thresholds = new ArrayList<>();
-        for (int i = 1; i <= NUM_OF_THRESHOLDS; i++) {
-            thresholds.add(min + (interval * i));
-        }
-
-        thresholds.forEach(thresholdValue -> criteria.add(new Criterion(
-                tmdbMovie -> comparisonFunction.apply(tmdbMovie) < thresholdValue,
-                descriptionStart + " " + thresholdValue))
-        );
-
-        return criteria;
-    }
-
-    public static long getEpochDayFromString(String dateString) {
-        LocalDate localDate = LocalDate.parse(
-                dateString,
-                DateTimeFormatter.ofPattern("yyyy-MM-dd")
-        );
-
-        return localDate.toEpochDay();
-    }
-
-    private static Collection<? extends Criterion> generateAllListCriteria(UserFullMovies userFullMovies) {
-        final Map<String, Integer> genreCount = new HashMap<>();
-
-        final Map<String, Integer> keywordCount = new HashMap<>();
-        
-        final Map<String, Integer> castCount = new HashMap<>();
-
-        final Map<String, Integer> directorCount = new HashMap<>();
-
-//        final Map<String, Integer> spokenLanguageCount = new HashMap<>();
-
-        for (FullMovieInfo movie : userFullMovies.seenMovies) {
-            List<Genre> movieGenres = movie.tmdb.getGenres();
-
-            movieGenres.forEach(genre -> {
-                String genreName = genre.getName();
-                if (!genreCount.containsKey(genreName))
-                    genreCount.put(genreName, 1);
-                else {
-                    final Integer integer = genreCount.get(genreName);
-                    genreCount.put(genreName, integer + 1);
-                }
-            });
-
-            final List<String> keywordsForMovie = movie.tmdb.getKeywords().keywords.stream()
-                    .map(Keyword::getName).collect(Collectors.toList());
-
-            // keyword count
-            keywordsForMovie.forEach(keyword -> {
-                if (!keywordCount.containsKey(keyword))
-                    keywordCount.put(keyword, 1);
-                else {
-                    final Integer integer = keywordCount.get(keyword);
-                    keywordCount.put(keyword, integer + 1);
-                }
-            });
-
-            final List<String> castForMovie = movie.tmdb.getTopCastAsList(TOP_CAST_LIMIT);
-
-            castForMovie.forEach(cast -> {
-                if (!castCount.containsKey(cast))
-                    castCount.put(cast, 1);
-                else {
-                    final Integer integer = castCount.get(cast);
-                    castCount.put(cast, integer + 1);
-                }
-            });
-
-            final List<String> directorsForMovie = movie.tmdb.getDirectorsAsList();
-
-            directorsForMovie.forEach(director -> {
-                if (!directorCount.containsKey(director))
-                    directorCount.put(director, 1);
-                else {
-                    final Integer integer = directorCount.get(director);
-                    directorCount.put(director, integer + 1);
-                }
-            });
-        }
-
-        castCount.entrySet().removeIf(e -> e.getValue() == 1);
-        directorCount.entrySet().removeIf(e -> e.getValue() == 1);
-
-        final LinkedHashSet<String> allKeywords = new LinkedHashSet<>(keywordCount.keySet());
-        final LinkedHashSet<String> allGenres = new LinkedHashSet<>(genreCount.keySet());
-        final LinkedHashSet<String> allCast = new LinkedHashSet<>(castCount.keySet());
-        final LinkedHashSet<String> allDirectors = new LinkedHashSet<>(directorCount.keySet());
-
-        ArrayList<Criterion> criteria = new ArrayList<>();
-
-        criteria.addAll(generateSingleListCriteria(allGenres,
-                                                   "has genre",
-                                                   TmdbMovie::getGenresAsList));
-        criteria.addAll(generateSingleListCriteria(allKeywords,
-                                                   "has keyword",
-                                                   TmdbMovie::getKeywordsAsList));
-
-        criteria.addAll(generateSingleListCriteria(allCast,
-                                                   "has cast",
-                                                   TmdbMovie::getCastAsList));
-
-        criteria.addAll(generateSingleListCriteria(allDirectors,
-                                                   "has director",
-                                                   TmdbMovie::getDirectorsAsList));
-
-        return criteria;
-    }
-
-    private static Collection<? extends Criterion> generateSingleListCriteria(
-            LinkedHashSet<String> stringSet,
-            String descriptionStart,
-            Function<TmdbMovie, List<String>> listFunction) {
-        final ArrayList<Criterion> criteria = new ArrayList<>();
-
-        stringSet.forEach(str -> criteria.add(new Criterion(
-                tmdbMovie -> listFunction.apply(tmdbMovie).contains(str),
-                descriptionStart + " " + str))
-        );
-
-        return criteria;
     }
 
 
