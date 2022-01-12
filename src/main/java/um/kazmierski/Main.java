@@ -31,18 +31,25 @@ public class Main {
     private static final String TASK_DATA_PATH = "./data/task.csv"; // task data
     private static final String API_KEY_PATH = "./data/tmdb_api_key.txt"; // TMDB API key
     private static final String SUBMISSION_FILE_PATH = "./data/submission.csv"; // result file
+
+
+    // TASK 5 CONFIG
     private static final int CLASSES_COUNT = 6;
     private static final int MAX_DEPTH = 2;
     private static final int NO_SCORE = -999;
     private static final int NUM_OF_THRESHOLDS = 3;
     private static final int DEPTH_START_ZERO = 0;
     private static final int TOP_CAST_LIMIT = 5;
+
+    // TASK 6 CONFIG
+    private static final int MIN_SAME_SEEN_MOVIES = 1;
+    private static final int K_CLOSEST_USERS = 5;
+
     public static final ObjectMapper mapper = new ObjectMapper();
 
     private static Map<Integer, TmdbMovie> movieCsvToTmdbMapping = null;
 
     public static void main(String[] args) throws IOException {
-        System.out.println("MAX_DEPTH: " + MAX_DEPTH);
         System.out.println("Time: " + LocalDateTime.now());
 
         String apiKey = readTmdbToken(new File(API_KEY_PATH));
@@ -72,27 +79,24 @@ public class Main {
         List<CsvMovieScore> taskData = readListFromCsv(taskDataFile, CsvMovieScore.class);
 
         // user ID mapped to seen and unseen user CSV movies
-        Map<Integer, UserCsvMovies> userMovies = generateUserIdMoviesMapping(trainingData, taskData);
-        final int totalUsers = userMovies.keySet().size();
+        Map<Integer, UserCsvMovies> allUsersCsvMovies = generateUserIdMoviesMapping(trainingData, taskData);
+        final int totalUsers = allUsersCsvMovies.keySet().size();
         final int totalUsers10Percent = totalUsers / 10;
 
         int userCounter = 1;
 
-        System.out.println("\nExecuting the decision tree...\n");
+        System.out.println("\nExecuting the person similarity based recommendations...\n");
 
-        for (Integer userId : userMovies.keySet()) {
+        for (Integer userId : allUsersCsvMovies.keySet()) {
             printProgress(userCounter, totalUsers10Percent, "User", totalUsers);
 
-            final UserCsvMovies userCsvMovies = userMovies.get(userId);
-            UserFullMovies userFullMovies = getUserFullMovies(userCsvMovies);
+            final UserCsvMovies userCsvMovies = allUsersCsvMovies.get(userId);
+            UserFullMovies currentUserFullMovies = getUserFullMovies(userCsvMovies);
 
-            Node rootNode = induceDecisionTree(userFullMovies);
+            Set<Integer> similarUsersIDsSorted = findSimilarUsersSorted(userId, currentUserFullMovies, allUsersCsvMovies);
 
-//            if (userId == 512)
-//                printTree(rootNode, userId);
-
-            for (FullMovieInfo movieInfo : userFullMovies.newMovies) {
-                movieInfo.csvScore.score = determineMovieScore(movieInfo, rootNode);
+            for (FullMovieInfo movieInfo : currentUserFullMovies.newMovies) {
+                movieInfo.csvScore.score = determineMovieScore(movieInfo, similarUsersIDsSorted, allUsersCsvMovies);
             }
 
             userCounter++;
@@ -101,6 +105,64 @@ public class Main {
         saveResultsToFile(taskData);
 
         System.out.println("\nComplete!");
+    }
+
+    private static Set<Integer> findSimilarUsersSorted(Integer sourceUserId, // user for whom we are finding recommendations
+                                                        UserFullMovies sourceUserFullMovies, // user's movies
+                                                        Map<Integer, UserCsvMovies> allUsersMovies) { // movies of ALL the users, key is the user ID
+        Map<Integer, UserCsvMovies> filteredAllUsersMovies = new HashMap<>(allUsersMovies); // movies of ALL the users, without the current (source) user
+        filteredAllUsersMovies.remove(sourceUserId);
+
+        Map<Integer, Double> userDistances = new HashMap<>();
+        for (Integer targetUserId : filteredAllUsersMovies.keySet()) {
+            int sameSeenMoviesCounter = 0;
+            int distanceSum = 0;
+            final UserCsvMovies targetUserCsvMovies = allUsersMovies.get(targetUserId);
+
+            for (FullMovieInfo sourceUserSeenMovie : sourceUserFullMovies.seenMovies) {
+                int targetUserMovieScore = getMovieScore(sourceUserSeenMovie, targetUserCsvMovies);
+
+                if (targetUserMovieScore < 0) // target user has not seen the movie
+                    continue;
+
+                int movieScoreDistance = Math.abs(sourceUserSeenMovie.csvScore.score - targetUserMovieScore);
+
+                distanceSum += movieScoreDistance;
+                sameSeenMoviesCounter++;
+            }
+
+            // TODO consider adding a bonus for a high amount of the same movies seen
+
+            if (sameSeenMoviesCounter >= MIN_SAME_SEEN_MOVIES) {
+                double userDistance = (double) distanceSum / sameSeenMoviesCounter;
+                userDistances.put(targetUserId, userDistance);
+            }
+        }
+
+        final LinkedHashMap<Integer, Double> userDistancesSorted = userDistances.entrySet()
+                .stream()
+                .sorted(Map.Entry.comparingByValue())
+                .collect(Collectors.toMap(
+                        Map.Entry::getKey,
+                        Map.Entry::getValue,
+                        (oldValue, newValue) -> oldValue, LinkedHashMap::new));
+
+        return userDistancesSorted.keySet();
+    }
+
+    private static int getMovieScore(FullMovieInfo sourceUserSeenMovie, UserCsvMovies targetUserCsvMovies) {
+//        for (CsvMovieScore targetSeenCsvMovieScore : targetUserCsvMovies.seenMovies) {
+//            if (targetSeenCsvMovieScore.index == sourceUserSeenMovie.csvScore.index) {
+//                return targetSeenCsvMovieScore.score;
+//            }
+//        }
+//
+//        return -1;
+        return targetUserCsvMovies.seenMovies.stream()
+                .filter(seenCsvMovieScore -> seenCsvMovieScore.movieCsvIndex == sourceUserSeenMovie.csvScore.movieCsvIndex)
+                .findFirst()
+                .map(csvMovieScore -> csvMovieScore.score)
+                .orElse(-1);
     }
 
     public static void printTree(Node root, int userId) {
@@ -198,7 +260,7 @@ public class Main {
                 bestGiniIndexRight = giniIndexRight;
             }
         }
-        
+
         Node leftNode;
         Node rightNode;
 
@@ -504,14 +566,26 @@ public class Main {
         }
     }
 
-    private static int determineMovieScore(FullMovieInfo fullMovieInfo, Node node) {
-        if (node.isLeaf())
-            return node.scoreLabel;
+    private static int determineMovieScore(FullMovieInfo fullMovieInfo,
+                                           Set<Integer> similarUsersFullMoviesSorted,
+                                           Map<Integer, UserCsvMovies> allUsersCsvMovies) {
+        int sum = 0;
+        int counter = 0;
+        for (Integer similarUserId : similarUsersFullMoviesSorted) {
+            if (counter == K_CLOSEST_USERS)
+                break;
 
-        if (node.criterion.function.apply(fullMovieInfo.tmdb))
-            return determineMovieScore(fullMovieInfo, node.left);
-        else
-            return determineMovieScore(fullMovieInfo, node.right);
+            final int movieScore = getMovieScore(fullMovieInfo, allUsersCsvMovies.get(similarUserId));
+            if (movieScore < 0) // similar user has not seen the movie
+                continue;
+
+            sum += movieScore;
+            counter++;
+        }
+
+        double avg = (double) sum / counter;
+
+        return (int) Math.round(avg);
     }
 
     private static TmdbMovie getTmdbMovie(CsvMovieScore csvMovie) {
