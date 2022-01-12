@@ -1,9 +1,0 @@
-1. Gatunki.
-2. Słowa kluczowe.
-3. 5 aktorów z najwyższą popularnością w danym filmie.
-4. Reżyserzy.
-5. Popularność.
-6. Średnia wartość głosów.
-7. Liczba głosów.
-8. Budżet.
-9. Data premiery.
