@@ -1,1 +1,2 @@
-TODO
+Dla każdego użytkownika liczymy jego dystans do innych użytkowników (similarity.txt), potem sortujemy użytkowników po dystansie.
+Dla każdego nieznanego filmu użytkownika bierzemy średnią z ocen 5 pozostałych, najbliższych użytkowników, którzy ten film widzieli.

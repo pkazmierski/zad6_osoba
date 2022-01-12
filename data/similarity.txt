@@ -1,1 +1,3 @@
-TODO
+Dystans jest liczony jako iloraz sumy dystansów ocen* przez liczbę filmów obejrzanych przez obu użytkowników.
+Dystans ocen filmów to wartość bezwzględna z ich różnicy.
+* brane pod uwagę są tylko filmy, które widzieli obaj użytkownicy
